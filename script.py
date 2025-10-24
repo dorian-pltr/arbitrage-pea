@@ -40,7 +40,7 @@ prix_min = 0.1
 volume_euros_min = 1_000_000
 ratio_high_open_min = 1.1
 end_date = (date.today() - relativedelta(days=1)).isoformat()
-start_date = (date.today() - relativedelta(years=3)).isoformat()
+start_date = (date.today() - relativedelta(years=1)).isoformat()
 
 # DataFrame finale pour stocker résultats
 resultats = pd.DataFrame()
@@ -95,7 +95,10 @@ for ticker in tickers:
     # Pause pour éviter surcharge
     time.sleep(0.1)
 
-# Export en CSV avec séparateur virgule standard
-resultats.to_csv("output.csv", sep=';', index=True)
+# Création du nom de fichier incluant les dates de période
+output_filename = f"output_{start_date}_to_{end_date}.csv"
 
-print("Export terminé. Fichier output.csv créé.")
+# Export en CSV
+resultats.to_csv(output_filename, sep=';', index=True)
+
+print(f"Export terminé. Fichier {output_filename} créé.")
