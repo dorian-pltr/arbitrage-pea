@@ -1,104 +1,202 @@
-import asyncio
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-import yfinance as yf
+# Importation des modules nécessaires
+from datetime import datetime, timedelta
 import pandas as pd
-import gc
-import time
-from datetime import date
-from dateutil.relativedelta import relativedelta
+from tqdm import tqdm
+import yfinance as yf
 
 
-# Charger la liste tickers depuis https://live.euronext.com/en/products/equities/regulated/list
-df = pd.read_excel("input.xlsx")
+# Télécharge les données historiques pour un ticker donné sur une période et transforme le format
+def telecharger_donnees_histo(
+    ticker: str, start: str = None, end: str = None, interval: str = "1d"
+) -> pd.DataFrame:
+    # Téléchargement des données avec yfinance
+    df = yf.download(
+        tickers=ticker,
+        start=start,
+        end=end,
+        interval=interval,
+        progress=False,
+        auto_adjust=True,
+    )
+    # Transformation des données brutes en ajoutant des colonnes calculées
+    return transformer_donnees(df, ticker)
 
-marches_pea = ["Euronext Paris", "Euronext Growth Paris", "Euronext Brussels"]
 
-df_pea = df[df["Market"].isin(marches_pea)]
+# Transforme le DataFrame initial en ajoutant les colonnes utiles à l'analyse
+def transformer_donnees(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    # Définition des colonnes à utiliser
+    open_col = ("Open", ticker)
+    high_col = ("High", ticker)
+    low_col = ("Low", ticker)
+    close_col = ("Close", ticker)
+    volume_col = ("Volume", ticker)
 
-tickers_raw = df_pea["Symbol"].dropna().unique()
-
-# Construire la liste avec suffixe .PA pour Paris et Growth Paris
-tickers = []
-for ticker in tickers_raw:
-    ticker = str(ticker).strip()
-    market = df_pea[df_pea["Symbol"] == ticker]["Market"].values[0]
-    if market in ["Euronext Paris", "Euronext Growth Paris"]:
-        ticker_yf = ticker + ".PA"
-    else:
-        ticker_yf = ticker
-    tickers.append(ticker_yf)
-
-# tickers = tickers[:30]  # Limiter pour tests rapides
-
-print(f"Nombre tickers récupérés : {len(tickers)}")
-
-# Critères
-prix_min = 0.1
-volume_euros_min = 1_000_000
-ratio_high_open_min = 1.1
-end_date = (date.today() - relativedelta(days=1)).isoformat()
-start_date = (date.today() - relativedelta(years=1)).isoformat()
-
-# DataFrame finale pour stocker résultats
-resultats = pd.DataFrame()
-
-for ticker in tickers:
-    print(f"Téléchargement données pour {ticker}")
-    df = yf.download(ticker, start=start_date, end=end_date, auto_adjust=False)
-    if df.empty:
-        print(f"Aucune donnée pour {ticker}")
-        continue
-
-    open_col = ('Open', ticker)
-    high_col = ('High', ticker)
-    close_col = ('Close', ticker)
-    volume_col = ('Volume', ticker)
-
+    # Suppression des données manquantes
     df = df.dropna(subset=[open_col, high_col, close_col, volume_col])
-    df["Volume_Euros"] = df[volume_col] * df[close_col]
 
-    # Créer colonne Next_Open en shiftant sur df complet avant filtrage
+    # Calcul du prix d'ouverture du jour suivant
     df["Next_Open"] = df[open_col].shift(-1)
 
-    # Appliquer filtres y compris "Next_Open" non null
-    filtre = (
-        (df[close_col] > prix_min) &
-        (df["Volume_Euros"] > volume_euros_min) &
-        ((df[high_col] / df[open_col]) > ratio_high_open_min) &
-        (df["Next_Open"].notna())
+    # Calcul du ratio High/Open (plus haut du jour / ouverture)
+    df["High_Open_Ratio"] = df["High"] / df["Open"]
+
+    # Calcul du delta entre la clôture et l'ouverture suivante en %
+    df["Delta"] = 100 * (df["Next_Open"] - df[close_col]) / df[close_col]
+
+    # Préparation du DataFrame final pour export/analyse
+    export_df = pd.DataFrame(
+        {
+            "Ticker": ticker,
+            "Date": df.index,
+            "Volume": df[volume_col],
+            "Open": df[open_col],
+            "High": df[high_col],
+            "Low": df[low_col],
+            "Close": df[close_col],
+            "Next_Open": df["Next_Open"],
+            "Delta": df["Delta"],
+            "High_Open_Ratio": df["High_Open_Ratio"],
+        }
     )
-    df_filtre = df[filtre].copy()
 
-    # Calcul delta en pourcentage
-    df_filtre["Delta_%"] = 100 * (df_filtre["Next_Open"] - df_filtre[close_col]) / df_filtre[close_col]
+    return export_df
 
-    # Colonnes à exporter
-    export_df = pd.DataFrame({
-        "Ticker": ticker,
-        "Date": df_filtre.index,
-        "Close": df_filtre[close_col],
-        "Next_Open": df_filtre["Next_Open"],
-        "Delta_%": df_filtre["Delta_%"]
-    })
 
-    # Ajout des résultats au DataFrame global
-    resultats = pd.concat([resultats, export_df])
+# Crée la liste des tickers éligibles au PEA à partir d’un fichier CSV
+def liste_actions_pea():
+    liste = []
 
-    # Libération mémoire
-    del df
-    del export_df
-    gc.collect()
+    # Dictionnaire pour ajouter le suffixe Yahoo Finance selon le marché
+    market_suffix_map = {
+        "EURONEXT PARIS": ".PA",
+        "EURONEXT AMSTERDAM": ".AS",
+        "EURONEXT BRUSSELS": ".BR",
+        "EURONEXT MILAN": ".MI",
+        "EURONEXT LISBON": ".LS",
+        "OSLO BØRS": ".OL",
+        "EURONEXT DUBLIN": ".IR",
+    }
 
-    # Pause pour éviter surcharge
-    time.sleep(0.1)
+    # Lecture du fichier contenant la liste brute des actions
+    df_liste_brute = pd.read_csv("input.csv", sep=";")
+    df_liste = df_liste_brute.dropna(subset=["Symbol", "Market", "Currency"])
 
-# Création du nom de fichier incluant les dates de période
-output_filename = f"output_{start_date}_to_{end_date}.csv"
+    for index, row in df_liste.iterrows():
+        symbol_base = str(row["Symbol"]).strip()
+        marche = str(row["Market"]).strip().upper()
+        devise = str(row["Currency"]).strip().upper()
 
-# Export en CSV
-resultats.to_csv(output_filename, sep=';', index=True)
+        # On ne garde que les actions en euros
+        if devise != "EUR":
+            continue
 
-print(f"Export terminé. Fichier {output_filename} créé.")
+        # Recherche du suffixe de marché
+        suffix = None
+        for market_key, sfx_val in market_suffix_map.items():
+            if market_key.upper() in marche:
+                suffix = sfx_val
+                break
+
+        # Construction du ticker final compatible Yahoo Finance
+        if suffix:
+            if not symbol_base.endswith(suffix):
+                ticker_final = symbol_base + suffix
+            else:
+                ticker_final = symbol_base
+            liste.append(ticker_final)
+
+    return liste
+
+
+# Fonction de filtrage selon conditions de delta, volume et clôture
+def check_conditions(df: pd.DataFrame) -> pd.DataFrame:
+    # Filtre sur delta, volume et clôture minimale
+    df_filtered = df[
+        (df["Delta"] > 1.1) & (df["Volume_Euros"] > 1_000_000) & (df["Close"] > 0.1)
+    ].copy()
+
+    return df_filtered
+
+
+# Définition de la période d’analyse : x derniers jours
+start = datetime.today() - timedelta(days=1095)
+end = datetime.today() - timedelta(days=0)
+
+# Récupération de la liste des tickers
+tickers = liste_actions_pea()
+# Exemple de tickers : ['ALKAL.PA', 'ADOC.PA','GNFT.PA']
+
+dfs = []
+
+# Téléchargement et filtrage des données pour chaque ticker
+for ticker in tqdm(tickers, desc="Téléchargement des données"):
+    df = telecharger_donnees_histo(
+        ticker, start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")
+    )
+    df["Volume_Euros"] = df["Volume"] * df["Close"]
+
+    # On ignore les tickers sans données valides
+    if df.empty:
+        continue
+
+    # Application du filtre sur les conditions : clôture, volume, ratio high/open, présence de Next_Open
+    filtre = (
+        (df["Close"] > 0.1)
+        & (df["Volume_Euros"] > 1_000_000)
+        & (df["High_Open_Ratio"] > 1.1)
+        & (df["Next_Open"].notna())
+    )
+
+    df = df[filtre].copy()
+
+    # On ignore si aucun jour ne passe le filtre
+    if df.empty:
+        continue
+
+    # Ajout de la colonne ticker pour l’analyse agrégée
+    df["ticker"] = ticker
+
+    # Stockage du DataFrame filtré
+    dfs.append(df)
+
+# Agrégation et analyse des résultats
+if dfs:
+    df_total = pd.concat(dfs, ignore_index=True)
+
+    # Trie le tableau dans l'ordre chronologique
+    df_total = df_total.sort_values(by="Date").reset_index(drop=True)
+
+    # Calcul du delta moyen global toutes actions confondues
+    mean_delta = df_total["Delta"].mean()
+    # Calcul du nombre total de transactions retenues
+    n_transactions = len(df_total)
+
+    # Calcul du delta moyen par ticker
+    ticker_means = df_total.groupby("ticker")["Delta"].mean()
+
+    # Recherche du ticker gagnant et perdant sur la période
+    winner = ticker_means.idxmax()
+    winner_delta = ticker_means.max()
+    loser = ticker_means.idxmin()
+    loser_delta = ticker_means.min()
+
+    # Date correspondant au meilleur delta du gagnant
+    best_row = (
+        df_total[df_total["ticker"] == winner]
+        .sort_values("Delta", ascending=False)
+        .iloc[0]
+    )
+    best_date = best_row["Date"]
+    # Date correspondant au moins bon delta du perdant
+    worst_row = df_total[df_total["ticker"] == loser].sort_values("Delta").iloc[0]
+    worst_date = worst_row["Date"]
+
+    # Affichage du DataFrame trié et des statistiques résumées avec dates
+    print(df_total)
+    print(
+        f"\nDelta moyen : {mean_delta:.2f} % sur {n_transactions} transactions sur la période du {start.strftime('%Y-%m-%d')} au {end.strftime('%Y-%m-%d')}."
+    )
+    print(
+        f"Gagnant : {winner} ({winner_delta:.2f} %), meilleure transaction le {best_date}"
+    )
+    print(f"Perdant : {loser} ({loser_delta:.2f} %), pire transaction le {worst_date}")

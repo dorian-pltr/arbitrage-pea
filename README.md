@@ -1,102 +1,76 @@
-# Analyseur de tickers Euronext avec yfinance
+# Analyse des Actions Éligibles au PEA sur 3 Ans avec yfinance
 
-Ce projet Python automatise l’analyse des actions cotées sur **Euronext** (Paris, Growth, et Bruxelles).  
-En s’appuyant sur les données **Yahoo Finance**, il applique des filtres de volume et de variation journalière, puis calcule la performance entre la **clôture d’un jour et l’ouverture du lendemain**.  
-Les résultats sont exportés automatiquement dans un fichier CSV nommé selon la période d’analyse.
+Ce script Python télécharge et analyse les données historiques boursières des actions éligibles au PEA (Plan d’Épargne en Actions) cotées sur différents marchés européens, filtrées selon des critères précis de volume, variation de prix et ratio, sur une période voulue.
 
-## Fonctionnalités
+## Fonctionnalités principales
 
-- Télécharge la liste des tickers depuis le site officiel **Euronext**.
-- Filtre les actions éligibles au **PEA** (Euronext Paris, Growth Paris, Bruxelles).
-- Récupère les cotations via **yfinance** sur une période de trois ans.
-- Applique des critères personnalisables :
-  - Prix de clôture minimal (`prix_min`)
-  - Volume quotidien en euros minimal (`volume_euros_min`)
-  - Ratio entre le plus haut et le prix d’ouverture (`ratio_high_open_min`)
-- Calcule le **delta en pourcentage** entre la clôture et l’ouverture suivante.
-- Exporte automatiquement les résultats dans un fichier **CSV daté**.
+- Télécharge les données historiques (prix et volume) pour une liste d’actions européennes en EUR à partir de Yahoo Finance via yfinance.
+- Calcule des indicateurs personnalisés : ratio High/Open, delta % entre clôture et ouverture du jour suivant.
+- Filtre les données selon des seuils : delta > 1.1%, volume en euros > 1 million, prix de clôture > 0.1€, ratio High/Open > 1.1.
+- Agrège les données filtrées sur toute la période (1095 jours environ).
+- Calcule des statistiques clés : delta moyen global, delta moyen par ticker, meilleur et pire ticker selon delta.
+- Affiche le tableau des transactions retenues et les statistiques avec dates correspondantes.
 
-## Prérequis
+## Structure du script
 
-Avant d’exécuter le script, installer les dépendances nécessaires :
+### Fonctions principales
+
+- `telecharger_donnees_histo(ticker, start, end, interval)`: télécharge et formate les données historiques pour un ticker donné.
+- `transformer_donnees(df, ticker)`: ajoute des colonnes calculées (Next_Open, High_Open_Ratio, Delta) au DataFrame historique.
+- `liste_actions_pea()`: lit un fichier CSV `input.csv` et construit la liste des tickers Yahoo Finance pour les actions PEA en EUR.
+- `check_conditions(df)`: applique des filtres sur delta, volume et clôture (fonction utilisée dans la boucle principale).
+
+### Flux de la donnée
+
+1. Lecture du fichier CSV des actions PEA.
+2. Construction des tickers Yahoo Finance avec suffixes marché.
+3. Boucle sur chaque ticker : téléchargement, transformation, calcul volume en euros, filtrage, ajout au DataFrame final.
+4. Agrégation et calcul des statistiques finales.
+
+## Fichier requis
+
+- Le fichier `input.csv` doit contenir au moins les colonnes `Symbol`, `Market`, et `Currency`, et doit être téléchargé depuis la page [Euronext - All Equities](https://live.euronext.com/en/products/equities/list), puis placé à la racine du script sous le nom `input.csv`.
+
+## Dépendances
+
+- Python 3.x
+- pandas
+- tqdm
+- yfinance
+
+Installer via pip :
 
 ```bash
-pip install yfinance pandas python-dateutil openpyxl
+pip install pandas tqdm yfinance
 ```
 
-S'assurer d’avoir également **Python 3.8+** minimum installé.
+## Paramètres à ajuster
 
-## Préparation des données
-
-1. Aller sur la page officielle Euronext :  
-   [https://live.euronext.com/en/products/equities/regulated/list](https://live.euronext.com/en/products/equities/regulated/list)
-
-2. Télécharger la liste complète des actions.
-
-3. Placer le fichier téléchargé à la racine du projet sous le nom :
-
-```
-input.xlsx
-```
+- Période d’analyse dans les variables `start` et `end` (défaut : les 3 dernières années).
+- Seuils de filtrage dans la fonction `check_conditions` et boucle principale (delta, volume, ratio, prix).
 
 ## Utilisation
 
-Exécuter simplement le script :
+Lancer simplement le script. Le résultat affichera :
 
-```bash
-python script.py
-```
+- Le détail des transactions retenues selon critères.
+- Le delta moyen global sur la période.
+- Le ticker le plus performant (gagnant) et le moins performant (perdant) avec leurs meilleures et pires dates.
 
-Le script :
-
-- Télécharge les données pour chaque symbole identifié.
-- Applique les filtres.
-- Calcule le delta journalier entre `Close` et `Next_Open`.
-- Enregistre les résultats dans un fichier CSV nommé :
+## Exemple de sortie
 
 ```
-output_YYYY-MM-DD_to_YYYY-MM-DD.csv
+Ticker      Date        Volume    Open    High    Low     Close   ...
+XX.PA    2022-01-03  1200000   50.12   55.50   49.00   54.00   ...
+...
+
+Delta moyen : 1.54 % sur 1234 transactions sur la période du 2022-10-27 au 2025-10-27.
+Gagnant : XX.PA (3.25 %), meilleure transaction le 2024-06-15
+Perdant : XX.PA (-2.50 %), pire transaction le 2023-11-10
 ```
 
-Ce fichier contient les colonnes suivantes :
+## Avertissements
 
-| Ticker           | Date           | Close           | Next_Open          | Delta\_%       |
-| ---------------- | -------------- | --------------- | ------------------ | -------------- |
-| Code de l’action | Date boursière | Prix de clôture | Ouverture suivante | Variation en % |
-
-## Structure du projet
-
-```
-📁 projet/
-├── script.py # Script principal
-├── input.xlsx # Liste des actions Euronext
-└── output_YYYY-MM-DD_to_YYYY-MM-DD.csv # Résultats générés
-```
-
-## Personnalisation
-
-Ajuster les critères principaux dans le code :
-
-```python
-prix_min = 0.1
-volume_euros_min = 1_000_000
-ratio_high_open_min = 1.1
-end_date = (date.today() - relativedelta(days=1)).isoformat() # days, months, years
-start_date = (date.today() - relativedelta(years=3)).isoformat() # days, months, years
-```
-
-Augmenter ou diminuer ces seuils selon le profil d’analyse.
-
-## Résultat attendu
-
-L’exécution génère un CSV contenant uniquement les jours où :
-
-- Le volume échangé dépasse le seuil.
-- Le ratio **High / Open > ratio_high_open_min**.
-- Le prix > `prix_min`.
-- Les données du jour suivant sont disponibles pour calculer la performance.
-
-## Licence
-
-Ce projet est mis à disposition sous licence **MIT**.  
-Libre de modification, adaptation ou intégration dans des outils d’analyse boursière.
+- Les données du marché peuvent comporter des manques ou des anomalies.
+- L’analyse ne constitue pas un conseil financier.
+- Vérifier la disponibilité et la mise à jour du fichier `input.csv`.
