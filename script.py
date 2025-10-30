@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 from tqdm import tqdm
 import yfinance as yf
+import argparse
 
 
 # Télécharge les données historiques pour un ticker donné sur une période et transforme le format
@@ -119,8 +120,16 @@ def check_conditions(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # Définition de la période d’analyse : x derniers jours
-start = datetime.today() - timedelta(days=1095)
-end = datetime.today() - timedelta(days=0)
+parser = argparse.ArgumentParser(
+    description="Script d'arbitrage PEA: nombre de jours à analyser"
+)
+parser.add_argument(
+    "--jours", type=int, default=7, help="Nombre de jours à remonter (par défaut 7)"
+)
+args = parser.parse_args()
+
+start = datetime.today() - timedelta(days=args.jours)
+end = datetime.today()
 
 # Récupération de la liste des tickers
 tickers = liste_actions_pea()
