@@ -4,21 +4,24 @@ import pandas as pd
 from tqdm import tqdm
 import yfinance as yf
 import argparse
+import io
+from contextlib import redirect_stderr
 
 
 # Télécharge les données historiques pour un ticker donné sur une période et transforme le format
 def telecharger_donnees_histo(
     ticker: str, start: str = None, end: str = None, interval: str = "1d"
 ) -> pd.DataFrame:
-    # Téléchargement des données avec yfinance
-    df = yf.download(
-        tickers=ticker,
-        start=start,
-        end=end,
-        interval=interval,
-        progress=False,
-        auto_adjust=True,
-    )
+    # Téléchargement des données avec yfinance, en masquant les erreurs de téléchargement
+    with io.StringIO() as f, redirect_stderr(f):
+        df = yf.download(
+            tickers=ticker,
+            start=start,
+            end=end,
+            interval=interval,
+            progress=False,
+            auto_adjust=True,
+        )
     # Transformation des données brutes en ajoutant des colonnes calculées
     return transformer_donnees(df, ticker)
 
@@ -136,9 +139,10 @@ tickers = liste_actions_pea()
 # Exemple de tickers : ['ALKAL.PA', 'ADOC.PA','GNFT.PA']
 
 dfs = []
+failed_downloads = 0
 
 # Téléchargement et filtrage des données pour chaque ticker
-for ticker in tqdm(tickers, desc="Téléchargement des données"):
+for ticker in tqdm(tickers, desc=f"Téléchargement des données sur {args.jours} jours "):
     df = telecharger_donnees_histo(
         ticker, start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")
     )
@@ -146,6 +150,7 @@ for ticker in tqdm(tickers, desc="Téléchargement des données"):
 
     # On ignore les tickers sans données valides
     if df.empty:
+        failed_downloads += 1
         continue
 
     # Application du filtre sur les conditions : clôture, volume, ratio high/open, présence de Next_Open
@@ -201,7 +206,8 @@ if dfs:
     worst_date = worst_row["Date"]
 
     # Affichage du DataFrame trié et des statistiques résumées avec dates
-    print(df_total)
+    colonnes_affichage = ["Ticker", "Date", "Close", "Next_Open", "Delta"]
+    print(df_total[colonnes_affichage])
     print(
         f"\nDelta moyen : {mean_delta:.2f} % sur {n_transactions} transactions sur la période du {start.strftime('%Y-%m-%d')} au {end.strftime('%Y-%m-%d')}."
     )
@@ -209,3 +215,16 @@ if dfs:
         f"Gagnant : {winner} ({winner_delta:.2f} %), meilleure transaction le {best_date}"
     )
     print(f"Perdant : {loser} ({loser_delta:.2f} %), pire transaction le {worst_date}")
+
+    # Top trade et pire trade sur la période (globaux)
+    best_row = df_total.loc[df_total["Delta"].idxmax()]
+    worst_row = df_total.loc[df_total["Delta"].idxmin()]
+    print(
+        f"Top trade : {best_row['Ticker']} ({best_row['Delta']:.2f} %) le {best_row['Date']}"
+    )
+    print(
+        f"Pire trade : {worst_row['Ticker']} ({worst_row['Delta']:.2f} %) le {worst_row['Date']}"
+    )
+
+if failed_downloads > 0:
+    print(f"\nDonnées non téléchargées pour {failed_downloads} tickers.")
