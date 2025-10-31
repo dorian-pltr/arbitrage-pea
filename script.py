@@ -1,5 +1,6 @@
 # Importation des modules nécessaires
 from datetime import datetime, timedelta
+from typing import Optional
 import pandas as pd
 from tqdm import tqdm
 import yfinance as yf
@@ -10,17 +11,41 @@ from contextlib import redirect_stderr
 
 # Télécharge les données historiques pour un ticker donné sur une période et transforme le format
 def telecharger_donnees_histo(
-    ticker: str, start: str = None, end: str = None, interval: str = "1d"
+    ticker: str,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    period: Optional[str] = None,
+    interval: str = "1d",
 ) -> pd.DataFrame:
     # Téléchargement des données avec yfinance, en masquant les erreurs de téléchargement
     with io.StringIO() as f, redirect_stderr(f):
-        df = yf.download(
-            tickers=ticker,
-            start=start,
-            end=end,
-            interval=interval,
-            progress=False,
-            auto_adjust=True,
+        kwargs = {
+            "tickers": ticker,
+            "interval": interval,
+            "progress": False,
+            "auto_adjust": True,
+        }
+        if period is not None:
+            kwargs["period"] = period
+        else:
+            kwargs["start"] = start
+            kwargs["end"] = end
+        df = yf.download(**kwargs)
+    # Si aucun résultat, retourner un DataFrame vide avec le schéma attendu
+    if df is None or df.empty:
+        return pd.DataFrame(
+            {
+                "Ticker": pd.Series(dtype="object"),
+                "Date": pd.Series(dtype="datetime64[ns]"),
+                "Volume": pd.Series(dtype="float64"),
+                "Open": pd.Series(dtype="float64"),
+                "High": pd.Series(dtype="float64"),
+                "Low": pd.Series(dtype="float64"),
+                "Close": pd.Series(dtype="float64"),
+                "Next_Open": pd.Series(dtype="float64"),
+                "Delta": pd.Series(dtype="float64"),
+                "High_Open_Ratio": pd.Series(dtype="float64"),
+            }
         )
     # Transformation des données brutes en ajoutant des colonnes calculées
     return transformer_donnees(df, ticker)
@@ -115,9 +140,8 @@ def liste_actions_pea():
 # Fonction de filtrage selon conditions de delta, volume et clôture
 def check_conditions(df: pd.DataFrame) -> pd.DataFrame:
     # Filtre sur delta, volume et clôture minimale
-    df_filtered = df[
-        (df["Delta"] > 1.1) & (df["Volume_Euros"] > 1_000_000) & (df["Close"] > 0.1)
-    ].copy()
+    mask = (df["Delta"] > 1.1) & (df["Volume_Euros"] > 1_000_000) & (df["Close"] > 0.1)
+    df_filtered = df.loc[mask].copy()
 
     return df_filtered
 
@@ -143,9 +167,7 @@ failed_downloads = 0
 
 # Téléchargement et filtrage des données pour chaque ticker
 for ticker in tqdm(tickers, desc=f"Téléchargement des données sur {args.jours} jours "):
-    df = telecharger_donnees_histo(
-        ticker, start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d")
-    )
+    df = telecharger_donnees_histo(ticker, period=f"{args.jours + 2}d", interval="1d")
     df["Volume_Euros"] = df["Volume"] * df["Close"]
 
     # On ignore les tickers sans données valides
@@ -196,13 +218,15 @@ if dfs:
 
     # Date correspondant au meilleur delta du gagnant
     best_row = (
-        df_total[df_total["ticker"] == winner]
-        .sort_values("Delta", ascending=False)
+        df_total.loc[df_total["ticker"] == winner]
+        .sort_values(by="Delta", ascending=False)
         .iloc[0]
     )
     best_date = best_row["Date"]
     # Date correspondant au moins bon delta du perdant
-    worst_row = df_total[df_total["ticker"] == loser].sort_values("Delta").iloc[0]
+    worst_row = (
+        df_total.loc[df_total["ticker"] == loser].sort_values(by="Delta").iloc[0]
+    )
     worst_date = worst_row["Date"]
 
     # Affichage du DataFrame trié et des statistiques résumées avec dates
