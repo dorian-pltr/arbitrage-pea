@@ -16,6 +16,7 @@ def telecharger_donnees_histo(
     end: Optional[str] = None,
     period: Optional[str] = None,
     interval: str = "1d",
+    session=None,
 ) -> pd.DataFrame:
     # Téléchargement des données avec yfinance, en masquant les erreurs de téléchargement
     with io.StringIO() as f, redirect_stderr(f):
@@ -25,6 +26,9 @@ def telecharger_donnees_histo(
             "progress": False,
             "auto_adjust": True,
         }
+        # Réutilise une session HTTP unique et désactive le multithreading pour limiter les descripteurs ouverts
+        kwargs["session"] = session
+        kwargs["threads"] = False
         if period is not None:
             kwargs["period"] = period
         else:
@@ -95,15 +99,15 @@ def transformer_donnees(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
 def liste_actions_pea():
     liste = []
 
-    # Dictionnaire pour ajouter le suffixe Yahoo Finance selon le marché
+    # Dictionnaire pour ajouter le suffixe Yahoo Finance selon la place (robuste aux variantes Growth/Access/Expand)
     market_suffix_map = {
-        "EURONEXT PARIS": ".PA",
-        "EURONEXT AMSTERDAM": ".AS",
-        "EURONEXT BRUSSELS": ".BR",
-        "EURONEXT MILAN": ".MI",
-        "EURONEXT LISBON": ".LS",
-        "OSLO BØRS": ".OL",
-        "EURONEXT DUBLIN": ".IR",
+        "PARIS": ".PA",
+        "AMSTERDAM": ".AS",
+        "BRUSSELS": ".BR",
+        "MILAN": ".MI",
+        "LISBON": ".LS",
+        "OSLO": ".OL",
+        "DUBLIN": ".IR",
     }
 
     # Lecture du fichier contenant la liste brute des actions
@@ -119,10 +123,10 @@ def liste_actions_pea():
         if devise != "EUR":
             continue
 
-        # Recherche du suffixe de marché
+        # Recherche du suffixe de marché (tolérant aux variantes de marché)
         suffix = None
         for market_key, sfx_val in market_suffix_map.items():
-            if market_key.upper() in marche:
+            if market_key in marche:
                 suffix = sfx_val
                 break
 
@@ -162,6 +166,12 @@ end = datetime.today()
 tickers = liste_actions_pea()
 # Exemple de tickers : ['ALKAL.PA', 'ADOC.PA','GNFT.PA']
 
+# Affichage du nombre de tickers détectés
+try:
+    print(f"Tickers détectés: {len(tickers)}")
+except Exception:
+    pass
+
 dfs = []
 failed_downloads = 0
 
@@ -182,6 +192,29 @@ for ticker in tqdm(tickers, desc=f"Téléchargement des données sur {args.jours
         & (df["High_Open_Ratio"] > 1.1)
         & (df["Next_Open"].notna())
     )
+
+    # Alerte si des lignes passent les critères mais sont exclues car Next_Open est manquant
+    if not df.empty:
+        pre_filtre = (
+            (df["Close"] > 0.1)
+            & (df["Volume_Euros"] > 1_000_000)
+            & (df["High_Open_Ratio"] > 1.1)
+        )
+        na_next_open_rows = df.loc[pre_filtre & df["Next_Open"].isna()]
+        if not na_next_open_rows.empty:
+            try:
+                dates_missing = (
+                    na_next_open_rows["Date"].dt.strftime("%Y-%m-%d").tolist()
+                )
+            except Exception:
+                dates_missing = na_next_open_rows["Date"].astype(str).tolist()
+            if len(dates_missing) > 3:
+                dates_display = dates_missing[:3] + ["..."]
+            else:
+                dates_display = dates_missing
+            print(
+                f"Alerte: Next_Open manquant pour {ticker} aux dates: {dates_display}"
+            )
 
     df = df[filtre].copy()
 
@@ -207,8 +240,8 @@ if dfs:
     # Calcul du nombre total de transactions retenues
     n_transactions = len(df_total)
 
-    # Calcul du delta moyen par ticker
-    ticker_means = df_total.groupby("ticker")["Delta"].mean()
+    # Calcul du delta moyen par ticker (utiliser la colonne "Ticker" pour uniformiser)
+    ticker_means = df_total.groupby("Ticker")["Delta"].mean()
 
     # Recherche du ticker gagnant et perdant sur la période
     winner = ticker_means.idxmax()
@@ -218,14 +251,14 @@ if dfs:
 
     # Date correspondant au meilleur delta du gagnant
     best_row = (
-        df_total.loc[df_total["ticker"] == winner]
+        df_total.loc[df_total["Ticker"] == winner]
         .sort_values(by="Delta", ascending=False)
         .iloc[0]
     )
     best_date = best_row["Date"]
     # Date correspondant au moins bon delta du perdant
     worst_row = (
-        df_total.loc[df_total["ticker"] == loser].sort_values(by="Delta").iloc[0]
+        df_total.loc[df_total["Ticker"] == loser].sort_values(by="Delta").iloc[0]
     )
     worst_date = worst_row["Date"]
 
