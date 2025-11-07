@@ -157,6 +157,9 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "--jours", type=int, default=7, help="Nombre de jours à remonter (par défaut 7)"
 )
+parser.add_argument(
+    "--ratio", type=float, default=1.1, help="Ratio High/Open minimum (par défaut 1.1)"
+)
 args = parser.parse_args()
 
 start = datetime.today() - timedelta(days=args.jours)
@@ -189,7 +192,7 @@ for ticker in tqdm(tickers, desc=f"Téléchargement des données sur {args.jours
     filtre = (
         (df["Close"] > 0.1)
         & (df["Volume_Euros"] > 1_000_000)
-        & (df["High_Open_Ratio"] > 1.1)
+        & (df["High_Open_Ratio"] > args.ratio)
         & (df["Next_Open"].notna())
     )
 
@@ -198,7 +201,7 @@ for ticker in tqdm(tickers, desc=f"Téléchargement des données sur {args.jours
         pre_filtre = (
             (df["Close"] > 0.1)
             & (df["Volume_Euros"] > 1_000_000)
-            & (df["High_Open_Ratio"] > 1.1)
+            & (df["High_Open_Ratio"] > args.ratio)
         )
         na_next_open_rows = df.loc[pre_filtre & df["Next_Open"].isna()]
         if not na_next_open_rows.empty:
@@ -266,7 +269,7 @@ if dfs:
     colonnes_affichage = ["Ticker", "Date", "Close", "Next_Open", "Delta"]
     print(df_total[colonnes_affichage])
     print(
-        f"\nDelta moyen : {mean_delta:.2f} % sur {n_transactions} transactions sur la période du {start.strftime('%Y-%m-%d')} au {end.strftime('%Y-%m-%d')}."
+        f"\nDelta moyen : {mean_delta:.2f} % sur {n_transactions} transactions sur la période du {start.strftime('%Y-%m-%d')} au {end.strftime('%Y-%m-%d')} (ratio High/Open > {args.ratio})."
     )
     print(
         f"Gagnant : {winner} ({winner_delta:.2f} %), meilleure transaction le {best_date}"
